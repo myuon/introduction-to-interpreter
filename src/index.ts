@@ -48,9 +48,25 @@ if (import.meta.vitest) {
   }
 }
 
+const variableExp = /^[a-zA-Z_][a-zA-Z0-9_]*/;
+
+const consumeVariable = (t: string): string => t.match(variableExp)?.[0] ?? "";
+
 interface Token {
-  type: "plus" | "mult" | "div" | "minus" | "number" | "lparen" | "rparen";
+  type:
+    | "plus"
+    | "mult"
+    | "div"
+    | "minus"
+    | "number"
+    | "lparen"
+    | "rparen"
+    | "variable"
+    | "assignment"
+    | "def"
+    | "semicolon";
   number?: number;
+  variable?: string;
 }
 
 const runLexer = (input: string): Token[] => {
@@ -66,6 +82,19 @@ const runLexer = (input: string): Token[] => {
     if (numberStr) {
       tokens.push({ type: "number", number: parseFloat(numberStr) });
       position += numberStr.length;
+      continue;
+    }
+
+    if (input.slice(position, position + 3) === "def") {
+      tokens.push({ type: "def" });
+      position += 3;
+      continue;
+    }
+
+    const variableStr = consumeVariable(input.slice(position));
+    if (variableStr) {
+      tokens.push({ type: "variable", variable: variableStr });
+      position += variableStr.length;
       continue;
     }
 
@@ -97,6 +126,16 @@ const runLexer = (input: string): Token[] => {
     if (input[position] === ")") {
       tokens.push({ type: "rparen" });
       position++;
+      continue;
+    }
+    if (input[position] === ";") {
+      tokens.push({ type: "semicolon" });
+      position++;
+      continue;
+    }
+    if (input.slice(position, position + 2) === ":=") {
+      tokens.push({ type: "assignment" });
+      position += 2;
       continue;
     }
 
@@ -139,25 +178,97 @@ if (import.meta.vitest) {
   }
 }
 
-type AST =
+type GLang = Statement[];
+
+type Statement =
+  | {
+      type: "definition";
+      arguments: string[];
+      body: Expression;
+    }
+  | {
+      type: "expression";
+      expression: Expression;
+    };
+
+type Expression =
   | {
       type: "binaryOperator";
       operator: "plus" | "minus" | "mult" | "div";
-      left: AST;
-      right: AST;
+      left: Expression;
+      right: Expression;
     }
   | {
       type: "number";
       value: number;
+    }
+  | {
+      type: "call";
+      arguments: Expression[];
+    }
+  | {
+      type: "variable";
+      variable: string;
     };
 
-const runParse = (tokens: Token[]): AST => {
+const runParse = (tokens: Token[]): GLang => {
   let position = 0;
 
-  const term = (): AST => {
+  const expect = (type: Token["type"]): Token => {
+    const token = tokens[position];
+    if (token.type !== type) {
+      throw new Error(`Expected ${type}`);
+    }
+    position++;
+    return token;
+  };
+  const expectVariable = (): string => {
+    const token = tokens[position];
+    if (token.type !== "variable") {
+      throw new Error("Expected variable");
+    }
+    position++;
+    return token.variable!;
+  };
+
+  const statements = (): GLang => {
+    const stmts: GLang = [];
+    while (position < tokens.length) {
+      stmts.push(statement());
+
+      if (position < tokens.length) {
+        expect("semicolon");
+      }
+    }
+    return stmts;
+  };
+  const statement = (): Statement => {
+    const token = tokens[position];
+    if (token.type === "def") {
+      return definition();
+    }
+
+    const expr = expression();
+    return { type: "expression", expression: expr };
+  };
+  const definition = (): Statement => {
+    expect("def");
+
+    const name = expectVariable();
+    expect("lparen");
+    const arg = expectVariable();
+    expect("rparen");
+
+    expect("assignment");
+
+    const body = expression();
+
+    return { type: "definition", arguments: [arg], body };
+  };
+  const expression = (): Expression => {
     return term2();
   };
-  const term2 = (): AST => {
+  const term2 = (): Expression => {
     let current = term1();
 
     while (position < tokens.length) {
@@ -177,7 +288,7 @@ const runParse = (tokens: Token[]): AST => {
 
     return current;
   };
-  const term1 = (): AST => {
+  const term1 = (): Expression => {
     let current = term0();
 
     while (position < tokens.length) {
@@ -197,7 +308,7 @@ const runParse = (tokens: Token[]): AST => {
 
     return current;
   };
-  const term0 = (): AST => {
+  const term0 = (): Expression => {
     const token = tokens[position];
     if (token.type === "number") {
       position++;
@@ -205,51 +316,70 @@ const runParse = (tokens: Token[]): AST => {
     }
     if (token.type === "lparen") {
       position++;
-      const exp = term();
+      const exp = expression();
       if (tokens[position].type !== "rparen") {
         throw new Error("Expected )");
       }
       position++;
       return exp;
     }
+    if (token.type === "variable") {
+      position++;
+
+      if (tokens[position].type === "lparen") {
+        position++;
+        const args = [expression()];
+        expect("rparen");
+        return { type: "call", arguments: args };
+      } else {
+        return { type: "variable", variable: token.variable! };
+      }
+    }
 
     throw new Error("Expected number");
   };
 
-  return term2();
+  return statements();
+};
+
+const runParseExpression = (tokens: Token[]): Expression => {
+  const result = runParse(tokens)[0];
+  if (result.type === "expression") {
+    return result.expression;
+  }
+
+  throw new Error("Invalid expression");
 };
 
 if (import.meta.vitest) {
-  const { it, expect } = import.meta.vitest;
+  const { it, expect, describe } = import.meta.vitest;
 
-  const tests = [
-    {
-      input: "200.2",
-      want: {
-        type: "number",
-        value: 200.2,
-      },
-    },
-    {
-      input: "4 + 2 - 1",
-      want: {
-        type: "binaryOperator",
-        operator: "minus",
-        left: {
-          type: "binaryOperator",
-          operator: "plus",
-          left: { type: "number", value: 4 },
-          right: { type: "number", value: 2 },
+  describe("runParseExpression", () => {
+    const tests = [
+      {
+        input: "200.2",
+        want: {
+          type: "number",
+          value: 200.2,
         },
-        right: { type: "number", value: 1 },
       },
-    },
-    {
-      input: "1 + 2 + 3 + 4 + 5 + 6 + 7",
-      want: {
-        type: "binaryOperator",
-        operator: "plus",
-        left: {
+      {
+        input: "4 + 2 - 1",
+        want: {
+          type: "binaryOperator",
+          operator: "minus",
+          left: {
+            type: "binaryOperator",
+            operator: "plus",
+            left: { type: "number", value: 4 },
+            right: { type: "number", value: 2 },
+          },
+          right: { type: "number", value: 1 },
+        },
+      },
+      {
+        input: "1 + 2 + 3 + 4 + 5 + 6 + 7",
+        want: {
           type: "binaryOperator",
           operator: "plus",
           left: {
@@ -265,116 +395,148 @@ if (import.meta.vitest) {
                   type: "binaryOperator",
                   operator: "plus",
                   left: {
-                    type: "number",
-                    value: 1,
+                    type: "binaryOperator",
+                    operator: "plus",
+                    left: {
+                      type: "number",
+                      value: 1,
+                    },
+                    right: {
+                      type: "number",
+                      value: 2,
+                    },
                   },
                   right: {
                     type: "number",
-                    value: 2,
+                    value: 3,
                   },
                 },
                 right: {
                   type: "number",
-                  value: 3,
+                  value: 4,
                 },
               },
               right: {
                 type: "number",
-                value: 4,
+                value: 5,
               },
             },
             right: {
               type: "number",
-              value: 5,
+              value: 6,
             },
           },
           right: {
             type: "number",
-            value: 6,
+            value: 7,
           },
         },
-        right: {
-          type: "number",
-          value: 7,
-        },
       },
-    },
-    {
-      input: "1 + 2 * 4",
-      want: {
-        type: "binaryOperator",
-        operator: "plus",
-        left: { type: "number", value: 1 },
-        right: {
-          type: "binaryOperator",
-          operator: "mult",
-          left: { type: "number", value: 2 },
-          right: { type: "number", value: 4 },
-        },
-      },
-    },
-    {
-      input: "2 / 4 - 4",
-      want: {
-        type: "binaryOperator",
-        operator: "minus",
-        left: {
-          type: "binaryOperator",
-          operator: "div",
-          left: { type: "number", value: 2 },
-          right: { type: "number", value: 4 },
-        },
-        right: { type: "number", value: 4 },
-      },
-    },
-    {
-      input: "1 + 2 * 4 / 2 - 1",
-      want: {
-        type: "binaryOperator",
-        operator: "minus",
-        left: {
+      {
+        input: "1 + 2 * 4",
+        want: {
           type: "binaryOperator",
           operator: "plus",
           left: { type: "number", value: 1 },
           right: {
             type: "binaryOperator",
-            operator: "div",
-            left: {
-              type: "binaryOperator",
-              operator: "mult",
-              left: { type: "number", value: 2 },
-              right: { type: "number", value: 4 },
-            },
-            right: { type: "number", value: 2 },
+            operator: "mult",
+            left: { type: "number", value: 2 },
+            right: { type: "number", value: 4 },
           },
         },
-        right: { type: "number", value: 1 },
       },
-    },
-    {
-      input: "(1 + 2) * 2",
-      want: {
-        type: "binaryOperator",
-        operator: "mult",
-        left: {
+      {
+        input: "2 / 4 - 4",
+        want: {
           type: "binaryOperator",
-          operator: "plus",
-          left: { type: "number", value: 1 },
+          operator: "minus",
+          left: {
+            type: "binaryOperator",
+            operator: "div",
+            left: { type: "number", value: 2 },
+            right: { type: "number", value: 4 },
+          },
+          right: { type: "number", value: 4 },
+        },
+      },
+      {
+        input: "1 + 2 * 4 / 2 - 1",
+        want: {
+          type: "binaryOperator",
+          operator: "minus",
+          left: {
+            type: "binaryOperator",
+            operator: "plus",
+            left: { type: "number", value: 1 },
+            right: {
+              type: "binaryOperator",
+              operator: "div",
+              left: {
+                type: "binaryOperator",
+                operator: "mult",
+                left: { type: "number", value: 2 },
+                right: { type: "number", value: 4 },
+              },
+              right: { type: "number", value: 2 },
+            },
+          },
+          right: { type: "number", value: 1 },
+        },
+      },
+      {
+        input: "(1 + 2) * 2",
+        want: {
+          type: "binaryOperator",
+          operator: "mult",
+          left: {
+            type: "binaryOperator",
+            operator: "plus",
+            left: { type: "number", value: 1 },
+            right: { type: "number", value: 2 },
+          },
           right: { type: "number", value: 2 },
         },
-        right: { type: "number", value: 2 },
       },
-    },
-  ];
+    ];
 
-  for (const test of tests) {
-    it(`should return ${JSON.stringify(test.want)} for ${test.input}`, () => {
-      expect(runParse(runLexer(test.input))).toEqual(test.want);
-    });
-  }
+    for (const test of tests) {
+      it(`should return ${JSON.stringify(test.want)} for ${test.input}`, () => {
+        expect(runParseExpression(runLexer(test.input))).toEqual(test.want);
+      });
+    }
+  });
+
+  describe("runParse", () => {
+    const tests = [
+      {
+        input: "def f(x) := x; f(2)",
+        want: [
+          {
+            type: "definition",
+            arguments: ["x"],
+            body: { type: "variable", variable: "x" },
+          },
+          {
+            type: "expression",
+            expression: {
+              type: "call",
+              arguments: [{ type: "number", value: 2 }],
+            },
+          },
+        ],
+      },
+    ];
+
+    for (const test of tests) {
+      it(`should return ${JSON.stringify(test.want)} for ${test.input}`, () => {
+        expect(runParse(runLexer(test.input))).toEqual(test.want);
+      });
+    }
+  });
 }
 
-const interpret = (ast: AST): number => {
+const interpret = (ast: Expression): number => {
   if (ast.type === "number") {
     return ast.value;
   }
@@ -438,14 +600,18 @@ if (import.meta.vitest) {
 
   for (const test of tests) {
     it(`should return ${test.want} for ${test.input}`, () => {
-      expect(interpret(runParse(runLexer(test.input)))).toBe(test.want);
+      expect(interpret(runParseExpression(runLexer(test.input)))).toBe(
+        test.want
+      );
     });
   }
 }
 
-const arg = process.argv.findIndex((arg) => arg === "-e");
-if (arg !== -1) {
-  console.log(interpret(runParse(runLexer(process.argv[arg + 1]))));
-} else {
-  console.log(`Usage: node ${process.argv[1]} -e "expression"`);
+if (process.env.NODE_ENV !== "test") {
+  const arg = process.argv.findIndex((arg) => arg === "-e");
+  if (arg !== -1) {
+    console.log(interpret(runParseExpression(runLexer(process.argv[arg + 1]))));
+  } else {
+    console.log(`Usage: node ${process.argv[1]} -e "expression"`);
+  }
 }
