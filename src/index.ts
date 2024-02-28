@@ -777,11 +777,12 @@ if (process.env.NODE_ENV !== "test") {
       console.log(`<Function:${result.name}>`);
 
       if (doPlot) {
+        const steps = 100;
         const ids: number[] = [];
         const xs: number[] = [];
         const ys: number[] = [];
-        for (let i = 0; i < 10; i++) {
-          const x = i;
+        for (let i = 0; i < steps; i++) {
+          const x = (i - steps / 2) / 10;
           const y = expectNumber(
             interpretExpression(result.body, {}, { [result.arguments[0]]: x })
           );
@@ -792,7 +793,7 @@ if (process.env.NODE_ENV !== "test") {
           ys.push(y);
         }
         spawnSync("gnuplot", ["-p", "-persist"], {
-          input: `plot '-' with linespoints\n${ids
+          input: `plot '-' with lines\n${ids
             .map((i) => `${xs[i]} ${ys[i]}`)
             .join("\n")}\ne\n`,
         });
