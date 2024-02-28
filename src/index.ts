@@ -328,7 +328,7 @@ const runParse = (tokens: Token[]): GLang => {
     if (token.type === "variable") {
       position++;
 
-      if (tokens[position].type === "lparen") {
+      if (position < tokens.length && tokens[position].type === "lparen") {
         position++;
         const args = [expression()];
         expect("rparen");
@@ -540,7 +540,21 @@ if (import.meta.vitest) {
   });
 }
 
-const interpret = (ast: GLang): number => {
+type Value =
+  | { type: "number"; value: number }
+  | {
+      type: "function";
+      body: Expression;
+    };
+
+const expectNumber = (value: Value): number => {
+  if (value.type !== "number") {
+    throw new Error("Expected number");
+  }
+  return value.value;
+};
+
+const interpret = (ast: GLang): Value => {
   const defs: Record<string, Statement> = {};
 
   for (const stmt of ast) {
@@ -559,32 +573,43 @@ const interpretExpression = (
   ast: Expression,
   defs: Record<string, Statement>,
   assignments: Record<string, number>
-): number => {
+): Value => {
   if (ast.type === "number") {
-    return ast.value;
+    return {
+      type: "number",
+      value: ast.value,
+    };
   }
   if (ast.type === "binaryOperator") {
     switch (ast.operator) {
       case "plus":
-        return (
-          interpretExpression(ast.left, defs, assignments) +
-          interpretExpression(ast.right, defs, assignments)
-        );
+        return {
+          type: "number",
+          value:
+            expectNumber(interpretExpression(ast.left, defs, assignments)) +
+            expectNumber(interpretExpression(ast.right, defs, assignments)),
+        };
       case "minus":
-        return (
-          interpretExpression(ast.left, defs, assignments) -
-          interpretExpression(ast.right, defs, assignments)
-        );
+        return {
+          type: "number",
+          value:
+            expectNumber(interpretExpression(ast.left, defs, assignments)) -
+            expectNumber(interpretExpression(ast.right, defs, assignments)),
+        };
       case "mult":
-        return (
-          interpretExpression(ast.left, defs, assignments) *
-          interpretExpression(ast.right, defs, assignments)
-        );
+        return {
+          type: "number",
+          value:
+            expectNumber(interpretExpression(ast.left, defs, assignments)) *
+            expectNumber(interpretExpression(ast.right, defs, assignments)),
+        };
       case "div":
-        return (
-          interpretExpression(ast.left, defs, assignments) /
-          interpretExpression(ast.right, defs, assignments)
-        );
+        return {
+          type: "number",
+          value:
+            expectNumber(interpretExpression(ast.left, defs, assignments)) /
+            expectNumber(interpretExpression(ast.right, defs, assignments)),
+        };
     }
   }
   if (ast.type === "call") {
@@ -595,17 +620,27 @@ const interpretExpression = (
 
     const newAssignments = { ...assignments };
     for (let i = 0; i < statement.arguments.length; i++) {
-      newAssignments[statement.arguments[i]] = interpretExpression(
-        ast.arguments[i],
-        defs,
-        newAssignments
+      newAssignments[statement.arguments[i]] = expectNumber(
+        interpretExpression(ast.arguments[i], defs, newAssignments)
       );
     }
 
     return interpretExpression(statement.body, defs, newAssignments);
   }
   if (ast.type === "variable") {
-    return assignments[ast.variable];
+    if (ast.variable in defs) {
+      const def = defs[ast.variable];
+      if (def.type === "definition") {
+        return { type: "function", body: def.body };
+      }
+
+      throw new Error("Invalid AST");
+    }
+    if (ast.variable in assignments) {
+      return { type: "number", value: assignments[ast.variable] };
+    }
+
+    throw new Error("Undefined variable: " + ast.variable);
   }
 
   throw new Error("Invalid AST");
@@ -657,13 +692,19 @@ if (import.meta.vitest) {
     for (const test of tests) {
       it(`should return ${test.want} for ${test.input}`, () => {
         expect(
-          interpretExpression(runParseExpression(runLexer(test.input)), {}, {})
+          expectNumber(
+            interpretExpression(
+              runParseExpression(runLexer(test.input)),
+              {},
+              {}
+            )
+          )
         ).toBe(test.want);
       });
     }
   });
 
-  describe("interpret", () => {
+  describe("interpret returns number", () => {
     const tests = [
       {
         input: "def f(x) := x; f(2)",
@@ -685,6 +726,26 @@ if (import.meta.vitest) {
 
     for (const test of tests) {
       it(`should return ${test.want} for ${test.input}`, () => {
+        expect(expectNumber(interpret(runParse(runLexer(test.input))))).toEqual(
+          test.want
+        );
+      });
+    }
+  });
+
+  describe("interpret returns function", () => {
+    const tests = [
+      {
+        input: "def f(x) := x; f",
+        want: {
+          type: "function",
+          body: { type: "variable", variable: "x" },
+        },
+      },
+    ];
+
+    for (const test of tests) {
+      it(`should return ${JSON.stringify(test.want)} for ${test.input}`, () => {
         expect(interpret(runParse(runLexer(test.input)))).toEqual(test.want);
       });
     }
