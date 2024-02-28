@@ -144,12 +144,32 @@ type AST =
 const runParse = (tokens: Token[]): AST => {
   let position = 0;
 
+  const term2 = (): AST => {
+    let current = term1();
+
+    while (position < tokens.length) {
+      const token = tokens[position];
+      if (token.type === "plus" || token.type === "minus") {
+        position++;
+        current = {
+          type: "binaryOperator",
+          operator: token.type,
+          left: current,
+          right: term1(),
+        };
+      } else {
+        break;
+      }
+    }
+
+    return current;
+  };
   const term1 = (): AST => {
     let current = number();
 
     while (position < tokens.length) {
       const token = tokens[position];
-      if (token.type === "plus" || token.type === "minus") {
+      if (token.type === "mult" || token.type === "div") {
         position++;
         current = {
           type: "binaryOperator",
@@ -174,7 +194,7 @@ const runParse = (tokens: Token[]): AST => {
     throw new Error("Expected number");
   };
 
-  return term1();
+  return term2();
 };
 
 if (import.meta.vitest) {
@@ -255,6 +275,58 @@ if (import.meta.vitest) {
           type: "number",
           value: 7,
         },
+      },
+    },
+    {
+      input: "1 + 2 * 4",
+      want: {
+        type: "binaryOperator",
+        operator: "plus",
+        left: { type: "number", value: 1 },
+        right: {
+          type: "binaryOperator",
+          operator: "mult",
+          left: { type: "number", value: 2 },
+          right: { type: "number", value: 4 },
+        },
+      },
+    },
+    {
+      input: "2 / 4 - 4",
+      want: {
+        type: "binaryOperator",
+        operator: "minus",
+        left: {
+          type: "binaryOperator",
+          operator: "div",
+          left: { type: "number", value: 2 },
+          right: { type: "number", value: 4 },
+        },
+        right: { type: "number", value: 4 },
+      },
+    },
+    {
+      input: "1 + 2 * 4 / 2 - 1",
+      want: {
+        type: "binaryOperator",
+        operator: "minus",
+        left: {
+          type: "binaryOperator",
+          operator: "plus",
+          left: { type: "number", value: 1 },
+          right: {
+            type: "binaryOperator",
+            operator: "div",
+            left: {
+              type: "binaryOperator",
+              operator: "mult",
+              left: { type: "number", value: 2 },
+              right: { type: "number", value: 4 },
+            },
+            right: { type: "number", value: 2 },
+          },
+        },
+        right: { type: "number", value: 1 },
       },
     },
   ];
