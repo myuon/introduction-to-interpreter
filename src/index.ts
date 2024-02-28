@@ -547,7 +547,7 @@ const interpret = (ast: GLang): number => {
     if (stmt.type === "definition") {
       defs[stmt.name] = stmt;
     } else if (stmt.type === "expression") {
-      return interpretExpression(stmt.expression, defs);
+      return interpretExpression(stmt.expression, defs, {});
     } else {
       throw new Error("Invalid AST");
     }
@@ -557,23 +557,34 @@ const interpret = (ast: GLang): number => {
 };
 const interpretExpression = (
   ast: Expression,
-  defs: Record<string, Statement> = {},
-  assignments: Record<string, number> = {}
+  defs: Record<string, Statement>,
+  assignments: Record<string, number>
 ): number => {
-  console.log(ast, defs, assignments);
   if (ast.type === "number") {
     return ast.value;
   }
   if (ast.type === "binaryOperator") {
     switch (ast.operator) {
       case "plus":
-        return interpretExpression(ast.left) + interpretExpression(ast.right);
+        return (
+          interpretExpression(ast.left, defs, assignments) +
+          interpretExpression(ast.right, defs, assignments)
+        );
       case "minus":
-        return interpretExpression(ast.left) - interpretExpression(ast.right);
+        return (
+          interpretExpression(ast.left, defs, assignments) -
+          interpretExpression(ast.right, defs, assignments)
+        );
       case "mult":
-        return interpretExpression(ast.left) * interpretExpression(ast.right);
+        return (
+          interpretExpression(ast.left, defs, assignments) *
+          interpretExpression(ast.right, defs, assignments)
+        );
       case "div":
-        return interpretExpression(ast.left) / interpretExpression(ast.right);
+        return (
+          interpretExpression(ast.left, defs, assignments) /
+          interpretExpression(ast.right, defs, assignments)
+        );
     }
   }
   if (ast.type === "call") {
@@ -646,7 +657,7 @@ if (import.meta.vitest) {
     for (const test of tests) {
       it(`should return ${test.want} for ${test.input}`, () => {
         expect(
-          interpretExpression(runParseExpression(runLexer(test.input)))
+          interpretExpression(runParseExpression(runLexer(test.input)), {}, {})
         ).toBe(test.want);
       });
     }
@@ -657,6 +668,10 @@ if (import.meta.vitest) {
       {
         input: "def f(x) := x; f(2)",
         want: 2,
+      },
+      {
+        input: "def f(x) := x + 2; f(2)",
+        want: 4,
       },
     ];
 
@@ -671,9 +686,7 @@ if (import.meta.vitest) {
 if (process.env.NODE_ENV !== "test") {
   const arg = process.argv.findIndex((arg) => arg === "-e");
   if (arg !== -1) {
-    console.log(
-      interpretExpression(runParseExpression(runLexer(process.argv[arg + 1])))
-    );
+    console.log(interpret(runParse(runLexer(process.argv[arg + 1]))));
   } else {
     console.log(`Usage: node ${process.argv[1]} -e "expression"`);
   }
