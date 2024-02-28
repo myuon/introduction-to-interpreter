@@ -1,3 +1,5 @@
+import { spawnSync } from "child_process";
+
 const numberLiteralExp = /^\-?\d+(\.\d+)?/;
 
 const consumeNumberLiteral = (t: string): string =>
@@ -746,7 +748,12 @@ if (import.meta.vitest) {
         input: "def f(x) := x; f",
         want: {
           type: "function",
-          body: { type: "variable", variable: "x" },
+          name: "f",
+          arguments: ["x"],
+          body: {
+            type: "variable",
+            variable: "x",
+          },
         },
       },
     ];
@@ -761,12 +768,35 @@ if (import.meta.vitest) {
 
 if (process.env.NODE_ENV !== "test") {
   const arg = process.argv.findIndex((arg) => arg === "-e");
+  const doPlot = process.argv.findIndex((arg) => arg === "--plot") !== -1;
   if (arg !== -1) {
     const result = interpret(runParse(runLexer(process.argv[arg + 1])));
     if (result.type === "number") {
       console.log(result.value);
     } else {
       console.log(`<Function:${result.name}>`);
+
+      if (doPlot) {
+        const ids: number[] = [];
+        const xs: number[] = [];
+        const ys: number[] = [];
+        for (let i = 0; i < 10; i++) {
+          const x = i;
+          const y = expectNumber(
+            interpretExpression(result.body, {}, { [result.arguments[0]]: x })
+          );
+
+          console.log(`f(${x}) = ${y}`);
+          ids.push(i);
+          xs.push(x);
+          ys.push(y);
+        }
+        spawnSync("gnuplot", ["-p", "-persist"], {
+          input: `plot '-' with linespoints\n${ids
+            .map((i) => `${xs[i]} ${ys[i]}`)
+            .join("\n")}\ne\n`,
+        });
+      }
     }
   } else {
     console.log(`Usage: node ${process.argv[1]} -e "expression"`);
