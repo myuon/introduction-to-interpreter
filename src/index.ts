@@ -544,6 +544,8 @@ type Value =
   | { type: "number"; value: number }
   | {
       type: "function";
+      name: string;
+      arguments: string[];
       body: Expression;
     };
 
@@ -631,7 +633,12 @@ const interpretExpression = (
     if (ast.variable in defs) {
       const def = defs[ast.variable];
       if (def.type === "definition") {
-        return { type: "function", body: def.body };
+        return {
+          type: "function",
+          name: def.name,
+          arguments: def.arguments,
+          body: def.body,
+        };
       }
 
       throw new Error("Invalid AST");
@@ -755,7 +762,12 @@ if (import.meta.vitest) {
 if (process.env.NODE_ENV !== "test") {
   const arg = process.argv.findIndex((arg) => arg === "-e");
   if (arg !== -1) {
-    console.log(interpret(runParse(runLexer(process.argv[arg + 1]))));
+    const result = interpret(runParse(runLexer(process.argv[arg + 1])));
+    if (result.type === "number") {
+      console.log(result.value);
+    } else {
+      console.log(`<Function:${result.name}>`);
+    }
   } else {
     console.log(`Usage: node ${process.argv[1]} -e "expression"`);
   }
