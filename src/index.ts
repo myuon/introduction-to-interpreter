@@ -183,6 +183,7 @@ type GLang = Statement[];
 type Statement =
   | {
       type: "definition";
+      name: string;
       arguments: string[];
       body: Expression;
     }
@@ -204,6 +205,7 @@ type Expression =
     }
   | {
       type: "call";
+      name: string;
       arguments: Expression[];
     }
   | {
@@ -263,7 +265,7 @@ const runParse = (tokens: Token[]): GLang => {
 
     const body = expression();
 
-    return { type: "definition", arguments: [arg], body };
+    return { type: "definition", name, arguments: [arg], body };
   };
   const expression = (): Expression => {
     return term2();
@@ -330,7 +332,7 @@ const runParse = (tokens: Token[]): GLang => {
         position++;
         const args = [expression()];
         expect("rparen");
-        return { type: "call", arguments: args };
+        return { type: "call", name: token.variable!, arguments: args };
       } else {
         return { type: "variable", variable: token.variable! };
       }
@@ -514,6 +516,7 @@ if (import.meta.vitest) {
         want: [
           {
             type: "definition",
+            name: "f",
             arguments: ["x"],
             body: { type: "variable", variable: "x" },
           },
@@ -521,6 +524,7 @@ if (import.meta.vitest) {
             type: "expression",
             expression: {
               type: "call",
+              name: "f",
               arguments: [{ type: "number", value: 2 }],
             },
           },
@@ -536,81 +540,140 @@ if (import.meta.vitest) {
   });
 }
 
-const interpret = (ast: Expression): number => {
+const interpret = (ast: GLang): number => {
+  const defs: Record<string, Statement> = {};
+
+  for (const stmt of ast) {
+    if (stmt.type === "definition") {
+      defs[stmt.name] = stmt;
+    } else if (stmt.type === "expression") {
+      return interpretExpression(stmt.expression, defs);
+    } else {
+      throw new Error("Invalid AST");
+    }
+  }
+
+  throw new Error("No expression found");
+};
+const interpretExpression = (
+  ast: Expression,
+  defs: Record<string, Statement> = {},
+  assignments: Record<string, number> = {}
+): number => {
+  console.log(ast, defs, assignments);
   if (ast.type === "number") {
     return ast.value;
   }
   if (ast.type === "binaryOperator") {
     switch (ast.operator) {
       case "plus":
-        return interpret(ast.left) + interpret(ast.right);
+        return interpretExpression(ast.left) + interpretExpression(ast.right);
       case "minus":
-        return interpret(ast.left) - interpret(ast.right);
+        return interpretExpression(ast.left) - interpretExpression(ast.right);
       case "mult":
-        return interpret(ast.left) * interpret(ast.right);
+        return interpretExpression(ast.left) * interpretExpression(ast.right);
       case "div":
-        return interpret(ast.left) / interpret(ast.right);
+        return interpretExpression(ast.left) / interpretExpression(ast.right);
     }
+  }
+  if (ast.type === "call") {
+    const statement = defs[ast.name];
+    if (statement.type === "expression") {
+      throw new Error("Expected function definition");
+    }
+
+    const newAssignments = { ...assignments };
+    for (let i = 0; i < statement.arguments.length; i++) {
+      newAssignments[statement.arguments[i]] = interpretExpression(
+        ast.arguments[i],
+        defs,
+        newAssignments
+      );
+    }
+
+    return interpretExpression(statement.body, defs, newAssignments);
+  }
+  if (ast.type === "variable") {
+    return assignments[ast.variable];
   }
 
   throw new Error("Invalid AST");
 };
 
 if (import.meta.vitest) {
-  const { it, expect } = import.meta.vitest;
+  const { it, expect, describe } = import.meta.vitest;
 
-  const tests = [
-    {
-      input: "1 + 2 * 4 / 2",
-      want: 5,
-    },
-    {
-      input: "3 - -7.4",
-      want: 10.4,
-    },
-    {
-      input: "200.2",
-      want: 200.2,
-    },
-    {
-      input: "4 + 2 - 1",
-      want: 5,
-    },
-    {
-      input: "1 + 2 + 3 + 4 + 5 + 6 + 7",
-      want: 28,
-    },
-    {
-      input: "1 + 2 * 4",
-      want: 9,
-    },
-    {
-      input: "2 / 4 - 4",
-      want: -3.5,
-    },
-    {
-      input: "1 + 2 * 4 / 2 - 1",
-      want: 4,
-    },
-    {
-      input: "(1 + 2) * 2",
-      want: 6,
-    },
-  ];
+  describe("interpretExpression", () => {
+    const tests = [
+      {
+        input: "1 + 2 * 4 / 2",
+        want: 5,
+      },
+      {
+        input: "3 - -7.4",
+        want: 10.4,
+      },
+      {
+        input: "200.2",
+        want: 200.2,
+      },
+      {
+        input: "4 + 2 - 1",
+        want: 5,
+      },
+      {
+        input: "1 + 2 + 3 + 4 + 5 + 6 + 7",
+        want: 28,
+      },
+      {
+        input: "1 + 2 * 4",
+        want: 9,
+      },
+      {
+        input: "2 / 4 - 4",
+        want: -3.5,
+      },
+      {
+        input: "1 + 2 * 4 / 2 - 1",
+        want: 4,
+      },
+      {
+        input: "(1 + 2) * 2",
+        want: 6,
+      },
+    ];
 
-  for (const test of tests) {
-    it(`should return ${test.want} for ${test.input}`, () => {
-      expect(interpret(runParseExpression(runLexer(test.input)))).toBe(
-        test.want
-      );
-    });
-  }
+    for (const test of tests) {
+      it(`should return ${test.want} for ${test.input}`, () => {
+        expect(
+          interpretExpression(runParseExpression(runLexer(test.input)))
+        ).toBe(test.want);
+      });
+    }
+  });
+
+  describe("interpret", () => {
+    const tests = [
+      {
+        input: "def f(x) := x; f(2)",
+        want: 2,
+      },
+    ];
+
+    for (const test of tests) {
+      it(`should return ${test.want} for ${test.input}`, () => {
+        expect(interpret(runParse(runLexer(test.input)))).toEqual(test.want);
+      });
+    }
+  });
 }
 
 if (process.env.NODE_ENV !== "test") {
   const arg = process.argv.findIndex((arg) => arg === "-e");
   if (arg !== -1) {
-    console.log(interpret(runParseExpression(runLexer(process.argv[arg + 1]))));
+    console.log(
+      interpretExpression(runParseExpression(runLexer(process.argv[arg + 1])))
+    );
   } else {
     console.log(`Usage: node ${process.argv[1]} -e "expression"`);
   }
