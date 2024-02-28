@@ -673,6 +673,14 @@ if (import.meta.vitest) {
         input: "def f(x) := x + 2; f(2)",
         want: 4,
       },
+      {
+        input: "def f(x) := x + 2; def g(x) := x * x; g(f(2))",
+        want: 16,
+      },
+      {
+        input: "def f(x) := x + 2; def g(x) := x * x; f(g(2))",
+        want: 6,
+      },
     ];
 
     for (const test of tests) {
