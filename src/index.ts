@@ -49,7 +49,7 @@ if (import.meta.vitest) {
 }
 
 interface Token {
-  type: "plus" | "mult" | "div" | "minus" | "number";
+  type: "plus" | "mult" | "div" | "minus" | "number" | "lparen" | "rparen";
   number?: number;
 }
 
@@ -86,6 +86,16 @@ const runLexer = (input: string): Token[] => {
     }
     if (input[position] === "/") {
       tokens.push({ type: "div" });
+      position++;
+      continue;
+    }
+    if (input[position] === "(") {
+      tokens.push({ type: "lparen" });
+      position++;
+      continue;
+    }
+    if (input[position] === ")") {
+      tokens.push({ type: "rparen" });
       position++;
       continue;
     }
@@ -144,6 +154,9 @@ type AST =
 const runParse = (tokens: Token[]): AST => {
   let position = 0;
 
+  const term = (): AST => {
+    return term2();
+  };
   const term2 = (): AST => {
     let current = term1();
 
@@ -165,7 +178,7 @@ const runParse = (tokens: Token[]): AST => {
     return current;
   };
   const term1 = (): AST => {
-    let current = number();
+    let current = term0();
 
     while (position < tokens.length) {
       const token = tokens[position];
@@ -175,7 +188,7 @@ const runParse = (tokens: Token[]): AST => {
           type: "binaryOperator",
           operator: token.type,
           left: current,
-          right: number(),
+          right: term0(),
         };
       } else {
         break;
@@ -184,11 +197,20 @@ const runParse = (tokens: Token[]): AST => {
 
     return current;
   };
-  const number = (): AST => {
+  const term0 = (): AST => {
     const token = tokens[position];
     if (token.type === "number") {
       position++;
       return { type: "number", value: token.number! };
+    }
+    if (token.type === "lparen") {
+      position++;
+      const exp = term();
+      if (tokens[position].type !== "rparen") {
+        throw new Error("Expected )");
+      }
+      position++;
+      return exp;
     }
 
     throw new Error("Expected number");
@@ -327,6 +349,20 @@ if (import.meta.vitest) {
           },
         },
         right: { type: "number", value: 1 },
+      },
+    },
+    {
+      input: "(1 + 2) * 2",
+      want: {
+        type: "binaryOperator",
+        operator: "mult",
+        left: {
+          type: "binaryOperator",
+          operator: "plus",
+          left: { type: "number", value: 1 },
+          right: { type: "number", value: 2 },
+        },
+        right: { type: "number", value: 2 },
       },
     },
   ];
