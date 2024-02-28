@@ -1,4 +1,4 @@
-const numberLiteralExp = /\-?\d?\.?\d+/;
+const numberLiteralExp = /^\-?\d?\.?\d+/;
 
 const consumeNumberLiteral = (t: string): string =>
   t.match(numberLiteralExp)?.[0] ?? "";
@@ -35,6 +35,10 @@ if (import.meta.vitest) {
       input: "-3",
       want: "-3",
     },
+    {
+      input: "-",
+      want: "",
+    },
   ];
 
   for (const test of tests) {
@@ -57,6 +61,14 @@ const lexer = (input: string): Token[] => {
       position++;
       continue;
     }
+
+    const numberStr = consumeNumberLiteral(input.slice(position));
+    if (numberStr) {
+      tokens.push({ type: "number", number: parseFloat(numberStr) });
+      position += numberStr.length;
+      continue;
+    }
+
     if (input[position] === "+") {
       tokens.push({ type: "plus" });
       position++;
@@ -75,13 +87,6 @@ const lexer = (input: string): Token[] => {
     if (input[position] === "/") {
       tokens.push({ type: "div" });
       position++;
-      continue;
-    }
-
-    const numberStr = consumeNumberLiteral(input.slice(position));
-    if (numberStr) {
-      tokens.push({ type: "number", number: parseFloat(numberStr) });
-      position += numberStr.length;
       continue;
     }
 
