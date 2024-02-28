@@ -374,4 +374,78 @@ if (import.meta.vitest) {
   }
 }
 
-console.log("1 + 2 * 4 / 2");
+const interpret = (ast: AST): number => {
+  if (ast.type === "number") {
+    return ast.value;
+  }
+  if (ast.type === "binaryOperator") {
+    switch (ast.operator) {
+      case "plus":
+        return interpret(ast.left) + interpret(ast.right);
+      case "minus":
+        return interpret(ast.left) - interpret(ast.right);
+      case "mult":
+        return interpret(ast.left) * interpret(ast.right);
+      case "div":
+        return interpret(ast.left) / interpret(ast.right);
+    }
+  }
+
+  throw new Error("Invalid AST");
+};
+
+if (import.meta.vitest) {
+  const { it, expect } = import.meta.vitest;
+
+  const tests = [
+    {
+      input: "1 + 2 * 4 / 2",
+      want: 5,
+    },
+    {
+      input: "3 - -7.4",
+      want: 10.4,
+    },
+    {
+      input: "200.2",
+      want: 200.2,
+    },
+    {
+      input: "4 + 2 - 1",
+      want: 5,
+    },
+    {
+      input: "1 + 2 + 3 + 4 + 5 + 6 + 7",
+      want: 28,
+    },
+    {
+      input: "1 + 2 * 4",
+      want: 9,
+    },
+    {
+      input: "2 / 4 - 4",
+      want: -3.5,
+    },
+    {
+      input: "1 + 2 * 4 / 2 - 1",
+      want: 4,
+    },
+    {
+      input: "(1 + 2) * 2",
+      want: 6,
+    },
+  ];
+
+  for (const test of tests) {
+    it(`should return ${test.want} for ${test.input}`, () => {
+      expect(interpret(runParse(runLexer(test.input)))).toBe(test.want);
+    });
+  }
+}
+
+const arg = process.argv.findIndex((arg) => arg === "-e");
+if (arg !== -1) {
+  console.log(interpret(runParse(runLexer(process.argv[arg + 1]))));
+} else {
+  console.log(`Usage: node ${process.argv[1]} -e "expression"`);
+}
