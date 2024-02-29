@@ -790,7 +790,7 @@ if (process.env.NODE_ENV !== "test") {
         const ids: number[] = [];
         const xs: number[] = [];
         const ys: number[] = [];
-        for (let i = 0; i < steps; i++) {
+        for (let i = 0; i <= steps; i++) {
           const x = plotStart + (plotEnd - plotStart) * (i / steps);
           const y = expectNumber(
             interpretExpression(result.body, {}, { [result.arguments[0]]: x })
