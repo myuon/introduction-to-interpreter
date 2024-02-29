@@ -767,22 +767,31 @@ if (import.meta.vitest) {
 }
 
 if (process.env.NODE_ENV !== "test") {
-  const arg = process.argv.findIndex((arg) => arg === "-e");
   const doPlot = process.argv.findIndex((arg) => arg === "--plot") !== -1;
+
+  const plotStartIndex = process.argv.findIndex(
+    (arg) => arg === "--plot-start"
+  );
+  const plotStart =
+    plotStartIndex !== -1 ? parseFloat(process.argv[plotStartIndex + 1]) : -1;
+  const plotEndIndex = process.argv.findIndex((arg) => arg === "--plot-end");
+  const plotEnd =
+    plotEndIndex !== -1 ? parseFloat(process.argv[plotEndIndex + 1]) : 1;
+  console.log(plotEndIndex, plotEnd, plotStartIndex, plotStart);
+
+  const arg = process.argv.findIndex((arg) => arg === "-e");
   if (arg !== -1) {
     const result = interpret(runParse(runLexer(process.argv[arg + 1])));
     if (result.type === "number") {
       console.log(result.value);
     } else {
-      console.log(`<Function:${result.name}>`);
-
       if (doPlot) {
         const steps = 100;
         const ids: number[] = [];
         const xs: number[] = [];
         const ys: number[] = [];
         for (let i = 0; i < steps; i++) {
-          const x = (i - steps / 2) / 10;
+          const x = plotStart + (plotEnd - plotStart) * (i / steps);
           const y = expectNumber(
             interpretExpression(result.body, {}, { [result.arguments[0]]: x })
           );
