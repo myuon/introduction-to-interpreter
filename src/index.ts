@@ -777,7 +777,6 @@ if (process.env.NODE_ENV !== "test") {
   const plotEndIndex = process.argv.findIndex((arg) => arg === "--plot-end");
   const plotEnd =
     plotEndIndex !== -1 ? parseFloat(process.argv[plotEndIndex + 1]) : 1;
-  console.log(plotEndIndex, plotEnd, plotStartIndex, plotStart);
 
   const arg = process.argv.findIndex((arg) => arg === "-e");
   if (arg !== -1) {
@@ -809,6 +808,6 @@ if (process.env.NODE_ENV !== "test") {
       }
     }
   } else {
-    console.log(`Usage: node ${process.argv[1]} -e "expression"`);
+    console.log(`Usage: bun run ${process.argv[1]} -e "expression"`);
   }
 }
