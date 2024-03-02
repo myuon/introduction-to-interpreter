@@ -260,19 +260,23 @@ type Expression =
       operator: "plus" | "minus" | "mult" | "div";
       left: Expression;
       right: Expression;
+      position?: number;
     }
   | {
       type: "number";
       value: number;
+      position?: number;
     }
   | {
       type: "call";
       name: string;
       arguments: Expression[];
+      position?: number;
     }
   | {
       type: "variable";
       variable: string;
+      position?: number;
     };
 
 type ParseError =
@@ -395,6 +399,7 @@ const runParse = (tokens: Token[], withPosition: boolean = true): GLang => {
           operator: token.type,
           left: current,
           right: term1(),
+          position: withPosition ? token.position : undefined,
         };
       } else {
         break;
@@ -415,6 +420,7 @@ const runParse = (tokens: Token[], withPosition: boolean = true): GLang => {
           operator: token.type,
           left: current,
           right: term0(),
+          position: withPosition ? token.position : undefined,
         };
       } else {
         break;
@@ -427,7 +433,11 @@ const runParse = (tokens: Token[], withPosition: boolean = true): GLang => {
     const token = getToken();
     if (token.type === "number") {
       position++;
-      return { type: "number", value: token.number! };
+      return {
+        type: "number",
+        value: token.number!,
+        position: withPosition ? token.position : undefined,
+      };
     }
     if (token.type === "lparen") {
       position++;
@@ -442,9 +452,18 @@ const runParse = (tokens: Token[], withPosition: boolean = true): GLang => {
         position++;
         const args = [expression()];
         expect("rparen");
-        return { type: "call", name: token.variable!, arguments: args };
+        return {
+          type: "call",
+          name: token.variable!,
+          arguments: args,
+          position: withPosition ? token.position : undefined,
+        };
       } else {
-        return { type: "variable", variable: token.variable! };
+        return {
+          type: "variable",
+          variable: token.variable!,
+          position: withPosition ? token.position : undefined,
+        };
       }
     }
 
@@ -625,7 +644,9 @@ if (import.meta.vitest) {
 
     for (const test of tests) {
       it(`should return ${JSON.stringify(test.want)} for ${test.input}`, () => {
-        expect(runParseExpression(runLexer(test.input))).toEqual(test.want);
+        expect(runParseExpression(runLexer(test.input), false)).toEqual(
+          test.want
+        );
       });
     }
   });
@@ -693,6 +714,288 @@ if (import.meta.vitest) {
         } catch (e) {
           const error = e as ErrorWrapper<ParseError>;
           expect(error.value).toEqual(test.want);
+        }
+      });
+    }
+  });
+}
+
+type Type =
+  | {
+      type: "number";
+    }
+  | {
+      type: "function";
+      arguments: Type[];
+      result: Type;
+    }
+  | {
+      type: "unknown";
+    };
+
+type TypeError =
+  | {
+      type: "typeMismatch";
+      want: Type;
+      got: Type;
+      position?: number;
+    }
+  | {
+      type: "undefinedVariable";
+      variable: string;
+      position?: number;
+    }
+  | {
+      type: "undefinedFunction";
+      name: string;
+      position?: number;
+    }
+  | {
+      type: "expressionNotAllowed";
+      position?: number;
+    };
+
+const typeError = (error: TypeError): ErrorWrapper<TypeError> =>
+  new ErrorWrapper("typeError", error);
+
+const unify = (want: Type, got: Type, position?: number): Type => {
+  if (want.type === "unknown") {
+    return got;
+  }
+  if (want.type === "number" && got.type === "number") {
+    return { type: "number" };
+  }
+  if (want.type === "function" && got.type === "function") {
+    if (want.arguments.length !== got.arguments.length) {
+      throw typeError({
+        type: "typeMismatch",
+        want,
+        got,
+        position,
+      });
+    }
+
+    const unifiedArgs = [];
+    for (let i = 0; i < want.arguments.length; i++) {
+      unifiedArgs.push(unify(want.arguments[i], got.arguments[i], position));
+    }
+
+    return {
+      type: "function",
+      arguments: unifiedArgs,
+      result: unify(want.result, got.result, position),
+    };
+  }
+
+  throw typeError({
+    type: "typeMismatch",
+    want,
+    got,
+    position,
+  });
+};
+
+const typecheck = (ast: GLang): Type => {
+  const defs: Record<string, Type> = {};
+
+  for (let i = 0; i < ast.length; i++) {
+    const stmt = ast[i];
+    if (stmt.type === "definition") {
+      const assignments: Record<string, Type> = {};
+      for (const arg of stmt.arguments) {
+        assignments[arg] = { type: "number" };
+      }
+
+      const result = typecheckExpression(
+        stmt.body,
+        { type: "number" },
+        defs,
+        assignments
+      );
+
+      defs[stmt.name] = {
+        type: "function",
+        arguments: stmt.arguments.map(() => ({ type: "number" })),
+        result,
+      };
+    } else if (stmt.type === "expression") {
+      if (i !== ast.length - 1) {
+        throw typeError({
+          type: "expressionNotAllowed",
+          position: stmt.position,
+        });
+      }
+
+      return typecheckExpression(stmt.expression, { type: "number" }, defs, {});
+    } else {
+      throw new Error("unreachable");
+    }
+  }
+
+  throw new Error("unreachable");
+};
+const typecheckExpression = (
+  ast: Expression,
+  want: Type,
+  defs: Record<string, Type>,
+  assignments: Record<string, Type>
+): Type => {
+  if (ast.type === "number") {
+    return unify(want, { type: "number" }, ast.position);
+  }
+  if (ast.type === "binaryOperator") {
+    const left = typecheckExpression(
+      ast.left,
+      { type: "unknown" },
+      defs,
+      assignments
+    );
+    const right = typecheckExpression(
+      ast.right,
+      { type: "unknown" },
+      defs,
+      assignments
+    );
+
+    const result = unify(left, right, ast.left.position);
+    unify({ type: "number" }, result, ast.position);
+    unify(want, result, ast.position);
+
+    return { type: "number" };
+  }
+  if (ast.type === "call") {
+    const argTypes = [];
+    for (const arg of ast.arguments) {
+      argTypes.push(
+        typecheckExpression(arg, { type: "unknown" }, defs, assignments)
+      );
+    }
+
+    const def = defs[ast.name];
+    if (def === undefined) {
+      throw typeError({
+        type: "undefinedFunction",
+        name: ast.name,
+        position: ast.position,
+      });
+    }
+    const unified = unify(
+      { type: "function", arguments: argTypes, result: want },
+      def,
+      ast.position
+    );
+
+    if (unified.type === "function") {
+      return unified.result;
+    }
+
+    console.log(unified);
+
+    throw new Error("unreachable");
+  }
+  if (ast.type === "variable") {
+    if (ast.variable in assignments) {
+      return assignments[ast.variable];
+    }
+
+    if (ast.variable in defs) {
+      return defs[ast.variable];
+    }
+
+    throw typeError({
+      type: "undefinedVariable",
+      variable: ast.variable,
+      position: ast.position,
+    });
+  }
+
+  throw new Error("unreachable");
+};
+
+if (import.meta.vitest) {
+  const { it, expect, describe } = import.meta.vitest;
+
+  describe("typecheck", () => {
+    const tests = [
+      {
+        input: "def f(x) := x; f(2)",
+        want: { type: "number" },
+      },
+      {
+        input: "def f(x) := x; f",
+        want: {
+          type: "function",
+          arguments: [{ type: "number" }],
+          result: { type: "number" },
+        },
+      },
+    ];
+
+    for (const test of tests) {
+      it(`should return ${JSON.stringify(test.want)} for ${test.input}`, () => {
+        const ast = runParse(runLexer(test.input));
+        expect(test.want).toEqual(typecheck(ast));
+      });
+    }
+  });
+
+  describe("typecheck failed", () => {
+    const tests = [
+      {
+        input: "def f(x) := x; f(f)",
+        want: {
+          type: "typeMismatch",
+          want: {
+            type: "function",
+            arguments: [{ type: "number" }],
+            result: { type: "number" },
+          },
+          got: { type: "number" },
+        },
+      },
+      {
+        input: "def f(x) := y; f(1)",
+        want: {
+          type: "undefinedVariable",
+          variable: "y",
+        },
+      },
+      {
+        input: "def f(x) := x; f + f",
+        want: {
+          type: "typeMismatch",
+          want: { type: "number" },
+          got: {
+            type: "function",
+            arguments: [{ type: "number" }],
+            result: { type: "number" },
+          },
+        },
+      },
+      {
+        input: "g(2)",
+        want: {
+          type: "undefinedFunction",
+          name: "g",
+        },
+      },
+      {
+        input: "1 + 2; 3",
+        want: {
+          type: "expressionNotAllowed",
+        },
+      },
+    ];
+
+    for (const test of tests) {
+      it(`should return ${JSON.stringify(test.want)} for ${test.input}`, () => {
+        const ast = runParse(runLexer(test.input, false));
+        try {
+          typecheck(ast);
+          expect(true).toBe(false);
+        } catch (e) {
+          const error = e as ErrorWrapper<TypeError>;
+          expect(test.want).toEqual(error.value);
         }
       });
     }
@@ -917,7 +1220,9 @@ if (import.meta.vitest) {
 
     for (const test of tests) {
       it(`should return ${JSON.stringify(test.want)} for ${test.input}`, () => {
-        expect(interpret(runParse(runLexer(test.input)))).toEqual(test.want);
+        expect(interpret(runParse(runLexer(test.input), false))).toEqual(
+          test.want
+        );
       });
     }
   });
@@ -936,10 +1241,17 @@ if (process.env.NODE_ENV !== "test") {
     plotEndIndex !== -1 ? parseFloat(process.argv[plotEndIndex + 1]) : 1;
 
   const arg = process.argv.findIndex((arg) => arg === "-e");
+  const check = process.argv.findIndex(
+    (arg) => arg === "--check" || arg === "-c"
+  );
   const input = process.argv[arg + 1];
   if (arg !== -1) {
     try {
-      const result = interpret(runParse(runLexer(input)));
+      const ast = runParse(runLexer(input));
+      if (check !== -1) {
+        typecheck(ast);
+      }
+      const result = interpret(ast);
       if (result.type === "number") {
         console.log(result.value);
       } else {
@@ -983,6 +1295,18 @@ if (process.env.NODE_ENV !== "test") {
             console.error(`${input}\n${" ".repeat(errValue.position!)}^`);
           } else if (errValue.type === "unexpectedEos") {
             console.error(`${input}\n${" ".repeat(input.length)}^`);
+          }
+        } else if (err.name === "typeError") {
+          const errValue = (err as ErrorWrapper<TypeError>).value;
+
+          if (errValue.type === "typeMismatch") {
+            console.error(`${input}\n${" ".repeat(errValue.position!)}^`);
+          } else if (errValue.type === "undefinedVariable") {
+            console.error(`${input}\n${" ".repeat(errValue.position!)}^`);
+          } else if (errValue.type === "undefinedFunction") {
+            console.error(`${input}\n${" ".repeat(errValue.position!)}^`);
+          } else if (errValue.type === "expressionNotAllowed") {
+            console.error(`${input}\n${" ".repeat(errValue.position!)}^`);
           }
         }
       }
