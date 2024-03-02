@@ -1,4 +1,5 @@
 import { spawnSync } from "child_process";
+import { readFileSync } from "fs";
 
 class ErrorWrapper<T> extends Error {
   constructor(name: string, public value: T) {
@@ -1240,12 +1241,23 @@ if (process.env.NODE_ENV !== "test") {
   const plotEnd =
     plotEndIndex !== -1 ? parseFloat(process.argv[plotEndIndex + 1]) : 1;
 
-  const arg = process.argv.findIndex((arg) => arg === "-e");
+  let input;
+
+  const file = process.argv.findIndex((arg) => arg === "-i");
+  const fileInput = process.argv[file + 1];
+  if (file !== -1) {
+    input = readFileSync(fileInput, "utf-8");
+  }
+
+  const expression = process.argv.findIndex((arg) => arg === "-e");
+  if (expression !== -1) {
+    input = process.argv[expression + 1];
+  }
+
   const check = process.argv.findIndex(
     (arg) => arg === "--check" || arg === "-c"
   );
-  const input = process.argv[arg + 1];
-  if (arg !== -1) {
+  if (input) {
     try {
       const ast = runParse(runLexer(input));
       if (check !== -1) {
@@ -1254,7 +1266,9 @@ if (process.env.NODE_ENV !== "test") {
       const result = interpret(ast);
       if (result.type === "number") {
         console.log(result.value);
-      } else {
+      } else if (result.type === "function") {
+        console.log(`<Function:${result.name}>`);
+
         if (doPlot) {
           const steps = 100;
           const ids: number[] = [];
