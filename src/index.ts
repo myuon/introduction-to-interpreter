@@ -246,10 +246,12 @@ type Statement =
       name: string;
       arguments: string[];
       body: Expression;
+      position?: number;
     }
   | {
       type: "expression";
       expression: Expression;
+      position?: number;
     };
 
 type Expression =
@@ -278,14 +280,17 @@ type ParseError =
       type: "tokenMismatch";
       want: Token["type"];
       got: Token["type"];
+      position?: number;
     }
   | {
       type: "unexpectedToken";
       got: Token;
+      position?: number;
     }
   | {
       type: "definitionNotAllowed";
       got: Statement;
+      position?: number;
     }
   | {
       type: "unexpectedEos";
@@ -294,7 +299,7 @@ type ParseError =
 const parseError = (error: ParseError): ErrorWrapper<ParseError> =>
   new ErrorWrapper("parseError", error);
 
-const runParse = (tokens: Token[]): GLang => {
+const runParse = (tokens: Token[], withPosition: boolean = true): GLang => {
   let position = 0;
 
   const getToken = (): Token => {
@@ -307,7 +312,12 @@ const runParse = (tokens: Token[]): GLang => {
   const expect = (type: Token["type"]): Token => {
     const token = getToken();
     if (token.type !== type) {
-      throw parseError({ type: "tokenMismatch", want: type, got: token.type });
+      throw parseError({
+        type: "tokenMismatch",
+        want: type,
+        got: token.type,
+        position: withPosition ? token.position : undefined,
+      });
     }
     position++;
     return token;
@@ -319,6 +329,7 @@ const runParse = (tokens: Token[]): GLang => {
         type: "tokenMismatch",
         want: "variable",
         got: token.type,
+        position: withPosition ? token.position : undefined,
       });
     }
     position++;
@@ -343,10 +354,14 @@ const runParse = (tokens: Token[]): GLang => {
     }
 
     const expr = expression();
-    return { type: "expression", expression: expr };
+    return {
+      type: "expression",
+      expression: expr,
+      position: withPosition ? token.position : undefined,
+    };
   };
   const definition = (): Statement => {
-    expect("def");
+    const defToken = expect("def");
 
     const name = expectVariable();
     expect("lparen");
@@ -357,7 +372,13 @@ const runParse = (tokens: Token[]): GLang => {
 
     const body = expression();
 
-    return { type: "definition", name, arguments: [arg], body };
+    return {
+      type: "definition",
+      name,
+      arguments: [arg],
+      body,
+      position: withPosition ? defToken.position : undefined,
+    };
   };
   const expression = (): Expression => {
     return term2();
@@ -427,19 +448,30 @@ const runParse = (tokens: Token[]): GLang => {
       }
     }
 
-    throw parseError({ type: "unexpectedToken", got: token });
+    throw parseError({
+      type: "unexpectedToken",
+      got: token,
+      position: withPosition ? token.position : undefined,
+    });
   };
 
   return statements();
 };
 
-const runParseExpression = (tokens: Token[]): Expression => {
-  const result = runParse(tokens)[0];
+const runParseExpression = (
+  tokens: Token[],
+  withPosition: boolean = true
+): Expression => {
+  const result = runParse(tokens, withPosition)[0];
   if (result.type === "expression") {
     return result.expression;
   }
 
-  throw parseError({ type: "definitionNotAllowed", got: result });
+  throw parseError({
+    type: "definitionNotAllowed",
+    got: result,
+    position: withPosition ? result.position : undefined,
+  });
 };
 
 if (import.meta.vitest) {
@@ -623,7 +655,7 @@ if (import.meta.vitest) {
 
     for (const test of tests) {
       it(`should return ${JSON.stringify(test.want)} for ${test.input}`, () => {
-        expect(runParse(runLexer(test.input))).toEqual(test.want);
+        expect(runParse(runLexer(test.input), false)).toEqual(test.want);
       });
     }
   });
@@ -940,6 +972,18 @@ if (process.env.NODE_ENV !== "test") {
           const errValue = (err as ErrorWrapper<LexerError>).value;
 
           console.error(`${input}\n${" ".repeat(errValue.position!)}^`);
+        } else if (err.name === "parseError") {
+          const errValue = (err as ErrorWrapper<ParseError>).value;
+
+          if (errValue.type === "tokenMismatch") {
+            console.error(`${input}\n${" ".repeat(errValue.position!)}^`);
+          } else if (errValue.type === "definitionNotAllowed") {
+            console.error(`${input}\n${" ".repeat(errValue.position!)}^`);
+          } else if (errValue.type === "unexpectedToken") {
+            console.error(`${input}\n${" ".repeat(errValue.position!)}^`);
+          } else if (errValue.type === "unexpectedEos") {
+            console.error(`${input}\n${" ".repeat(input.length)}^`);
+          }
         }
       }
 
