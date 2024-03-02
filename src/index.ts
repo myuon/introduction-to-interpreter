@@ -1,5 +1,13 @@
 import { spawnSync } from "child_process";
 
+class ErrorWrapper<T> extends Error {
+  constructor(public value: T) {
+    super();
+    this.value = value;
+    this.message = JSON.stringify(value);
+  }
+}
+
 const numberLiteralExp = /^\-?\d+(\.\d+)?/;
 
 const consumeNumberLiteral = (t: string): string =>
@@ -71,11 +79,19 @@ interface Token {
   variable?: string;
 }
 
+type LexerError = {
+  type: "unexpectedCharacter";
+  got: string;
+};
+
+const lexerError = (error: LexerError): ErrorWrapper<LexerError> =>
+  new ErrorWrapper(error);
+
 const runLexer = (input: string): Token[] => {
   const tokens: Token[] = [];
   let position = 0;
   while (position < input.length) {
-    if (input[position] === " ") {
+    if (input[position] === " " || input[position] === "\n") {
       position++;
       continue;
     }
@@ -141,43 +157,72 @@ const runLexer = (input: string): Token[] => {
       continue;
     }
 
-    throw new Error("Invalid character: " + input[position]);
+    throw lexerError({
+      type: "unexpectedCharacter",
+      got: input[position],
+    });
   }
 
   return tokens;
 };
 
 if (import.meta.vitest) {
-  const { it, expect } = import.meta.vitest;
+  const { it, expect, describe } = import.meta.vitest;
 
-  const tests = [
-    {
-      input: "1 + 2 * 4 / 2",
-      want: [
-        { type: "number", number: 1 },
-        { type: "plus" },
-        { type: "number", number: 2 },
-        { type: "mult" },
-        { type: "number", number: 4 },
-        { type: "div" },
-        { type: "number", number: 2 },
-      ],
-    },
-    {
-      input: "3 - -7.4",
-      want: [
-        { type: "number", number: 3 },
-        { type: "minus" },
-        { type: "number", number: -7.4 },
-      ],
-    },
-  ];
+  describe("runLexer", () => {
+    const tests = [
+      {
+        input: "1 + 2 * 4 / 2",
+        want: [
+          { type: "number", number: 1 },
+          { type: "plus" },
+          { type: "number", number: 2 },
+          { type: "mult" },
+          { type: "number", number: 4 },
+          { type: "div" },
+          { type: "number", number: 2 },
+        ],
+      },
+      {
+        input: "3 - -7.4",
+        want: [
+          { type: "number", number: 3 },
+          { type: "minus" },
+          { type: "number", number: -7.4 },
+        ],
+      },
+    ];
 
-  for (const test of tests) {
-    it(`should return ${JSON.stringify(test.want)} for ${test.input}`, () => {
-      expect(runLexer(test.input)).toEqual(test.want);
-    });
-  }
+    for (const test of tests) {
+      it(`should return ${JSON.stringify(test.want)} for ${test.input}`, () => {
+        expect(runLexer(test.input)).toEqual(test.want);
+      });
+    }
+  });
+
+  describe("runLexer errors", () => {
+    const tests = [
+      {
+        input: "def f(x) = x",
+        want: {
+          type: "unexpectedCharacter",
+          got: "=",
+        },
+      },
+    ];
+
+    for (const test of tests) {
+      it(`should return ${JSON.stringify(test.want)} for ${test.input}`, () => {
+        try {
+          runLexer(test.input);
+          expect(true).toBe(false);
+        } catch (e) {
+          const error = e as ErrorWrapper<LexerError>;
+          expect(error.value).toEqual(test.want);
+        }
+      });
+    }
+  });
 }
 
 type GLang = Statement[];
@@ -215,21 +260,53 @@ type Expression =
       variable: string;
     };
 
+type ParseError =
+  | {
+      type: "tokenMismatch";
+      want: Token["type"];
+      got: Token["type"];
+    }
+  | {
+      type: "unexpectedToken";
+      got: Token;
+    }
+  | {
+      type: "definitionNotAllowed";
+      got: Statement;
+    }
+  | {
+      type: "unexpectedEos";
+    };
+
+const parseError = (error: ParseError): ErrorWrapper<ParseError> =>
+  new ErrorWrapper(error);
+
 const runParse = (tokens: Token[]): GLang => {
   let position = 0;
 
+  const getToken = (): Token => {
+    if (position < tokens.length) {
+      return tokens[position];
+    }
+
+    throw parseError({ type: "unexpectedEos" });
+  };
   const expect = (type: Token["type"]): Token => {
-    const token = tokens[position];
+    const token = getToken();
     if (token.type !== type) {
-      throw new Error(`Expected ${type}`);
+      throw parseError({ type: "tokenMismatch", want: type, got: token.type });
     }
     position++;
     return token;
   };
   const expectVariable = (): string => {
-    const token = tokens[position];
+    const token = getToken();
     if (token.type !== "variable") {
-      throw new Error("Expected variable");
+      throw parseError({
+        type: "tokenMismatch",
+        want: "variable",
+        got: token.type,
+      });
     }
     position++;
     return token.variable!;
@@ -247,7 +324,7 @@ const runParse = (tokens: Token[]): GLang => {
     return stmts;
   };
   const statement = (): Statement => {
-    const token = tokens[position];
+    const token = getToken();
     if (token.type === "def") {
       return definition();
     }
@@ -276,7 +353,7 @@ const runParse = (tokens: Token[]): GLang => {
     let current = term1();
 
     while (position < tokens.length) {
-      const token = tokens[position];
+      const token = getToken();
       if (token.type === "plus" || token.type === "minus") {
         position++;
         current = {
@@ -296,7 +373,7 @@ const runParse = (tokens: Token[]): GLang => {
     let current = term0();
 
     while (position < tokens.length) {
-      const token = tokens[position];
+      const token = getToken();
       if (token.type === "mult" || token.type === "div") {
         position++;
         current = {
@@ -313,7 +390,7 @@ const runParse = (tokens: Token[]): GLang => {
     return current;
   };
   const term0 = (): Expression => {
-    const token = tokens[position];
+    const token = getToken();
     if (token.type === "number") {
       position++;
       return { type: "number", value: token.number! };
@@ -321,10 +398,7 @@ const runParse = (tokens: Token[]): GLang => {
     if (token.type === "lparen") {
       position++;
       const exp = expression();
-      if (tokens[position].type !== "rparen") {
-        throw new Error("Expected )");
-      }
-      position++;
+      expect("rparen");
       return exp;
     }
     if (token.type === "variable") {
@@ -340,7 +414,7 @@ const runParse = (tokens: Token[]): GLang => {
       }
     }
 
-    throw new Error("Expected number");
+    throw parseError({ type: "unexpectedToken", got: token });
   };
 
   return statements();
@@ -352,7 +426,7 @@ const runParseExpression = (tokens: Token[]): Expression => {
     return result.expression;
   }
 
-  throw new Error("Invalid expression");
+  throw parseError({ type: "definitionNotAllowed", got: result });
 };
 
 if (import.meta.vitest) {
@@ -537,6 +611,44 @@ if (import.meta.vitest) {
     for (const test of tests) {
       it(`should return ${JSON.stringify(test.want)} for ${test.input}`, () => {
         expect(runParse(runLexer(test.input))).toEqual(test.want);
+      });
+    }
+  });
+
+  describe("runParse errors", () => {
+    const tests = [
+      {
+        input: "def f(",
+        want: {
+          type: "unexpectedEos",
+        },
+      },
+      {
+        input: "def f(x) x",
+        want: {
+          type: "tokenMismatch",
+          want: "assignment",
+          got: "variable",
+        },
+      },
+      {
+        input: "1 + def",
+        want: {
+          type: "unexpectedToken",
+          got: { type: "def" },
+        },
+      },
+    ];
+
+    for (const test of tests) {
+      it(`should return ${JSON.stringify(test.want)} for ${test.input}`, () => {
+        try {
+          runParse(runLexer(test.input));
+          expect(true).toBe(false);
+        } catch (e) {
+          const error = e as ErrorWrapper<ParseError>;
+          expect(error.value).toEqual(test.want);
+        }
       });
     }
   });
