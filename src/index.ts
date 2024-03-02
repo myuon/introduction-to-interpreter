@@ -278,6 +278,11 @@ type Expression =
       type: "variable";
       variable: string;
       position?: number;
+    }
+  | {
+      type: "paren";
+      expression: Expression;
+      position?: number;
     };
 
 type ParseError =
@@ -444,7 +449,10 @@ const runParse = (tokens: Token[], withPosition: boolean = true): GLang => {
       position++;
       const exp = expression();
       expect("rparen");
-      return exp;
+      return {
+        type: "paren",
+        expression: exp,
+      };
     }
     if (token.type === "variable") {
       position++;
@@ -633,10 +641,13 @@ if (import.meta.vitest) {
           type: "binaryOperator",
           operator: "mult",
           left: {
-            type: "binaryOperator",
-            operator: "plus",
-            left: { type: "number", value: 1 },
-            right: { type: "number", value: 2 },
+            type: "paren",
+            expression: {
+              type: "binaryOperator",
+              operator: "plus",
+              left: { type: "number", value: 1 },
+              right: { type: "number", value: 2 },
+            },
           },
           right: { type: "number", value: 2 },
         },
@@ -1112,6 +1123,9 @@ const interpretExpression = (
 
     throw new Error("Undefined variable: " + ast.variable);
   }
+  if (ast.type === "paren") {
+    return interpretExpression(ast.expression, defs, assignments);
+  }
 
   throw new Error("Invalid AST");
 };
@@ -1229,6 +1243,132 @@ if (import.meta.vitest) {
   });
 }
 
+const format = (
+  ast: GLang,
+  options: {
+    lineWidth: number;
+    indentWidth: number;
+  } = {
+    lineWidth: 80,
+    indentWidth: 4,
+  }
+) => {
+  let column = 0;
+  let result = "";
+
+  const write = (str: string, noSpace?: boolean) => {
+    const t = column === 0 || noSpace ? str : ` ${str}`;
+    result += t;
+    column += t.length;
+  };
+  const writeNoSpace = (str: string) => {
+    write(str, true);
+  };
+  const newline = () => {
+    result += "\n";
+    column = 0;
+  };
+
+  const expression = (ast: Expression, noSpace?: boolean) => {
+    if (ast.type === "number") {
+      write(ast.value.toString(), noSpace);
+    }
+    if (ast.type === "binaryOperator") {
+      expression(ast.left, noSpace);
+      switch (ast.operator) {
+        case "plus":
+          write("+");
+          break;
+        case "minus":
+          write("-");
+          break;
+        case "mult":
+          write("*");
+          break;
+        case "div":
+          write("/");
+          break;
+      }
+      expression(ast.right);
+    }
+    if (ast.type === "call") {
+      write(ast.name);
+      writeNoSpace("(");
+      for (let i = 0; i < ast.arguments.length; i++) {
+        expression(ast.arguments[i], i === 0);
+        if (i < ast.arguments.length - 1) {
+          write(",");
+        }
+      }
+      writeNoSpace(")");
+    }
+    if (ast.type === "variable") {
+      write(ast.variable);
+    }
+    if (ast.type === "paren") {
+      write("(");
+      expression(ast.expression, true);
+      writeNoSpace(")");
+    }
+  };
+
+  for (const stmt of ast) {
+    if (stmt.type === "definition") {
+      write("def");
+      write(stmt.name);
+      writeNoSpace("(");
+      writeNoSpace(stmt.arguments.join(", "));
+      writeNoSpace(")");
+      write(":=");
+      expression(stmt.body);
+
+      writeNoSpace(";");
+      newline();
+    } else if (stmt.type === "expression") {
+      newline();
+      expression(stmt.expression);
+    }
+  }
+
+  return result;
+};
+
+if (import.meta.vitest) {
+  const { it, expect, describe } = import.meta.vitest;
+
+  describe("format", () => {
+    const tests = [
+      {
+        input: "def f(x) := x; f(2)",
+        want: "def f(x) := x;\n\nf(2)",
+      },
+      {
+        input: "def f(x):=x; f(2)",
+        want: "def f(x) := x;\n\nf(2)",
+      },
+      {
+        input: "def f(x) := 1 + 2 + 3 + 4 + 5 + 6 + 7 + 8 + 9 + 10; f(2)",
+        want: `def f(x) := 1 + 2 + 3 + 4 + 5 +\n    6 + 7 + 8 + 9 + 10;\n\nf(2)`,
+      },
+      {
+        input: "def f(x) := (1 + 2 + 3) + (4 + 5 + 6) + (7 + 8 + 9 + 10); f(2)",
+        want: `def f(x) := (1 + 2 + 3) +\n    (4 + 5 + 6) + (6 + 7 + 8 + 9 + 10);\n\nf(2)`,
+      },
+    ];
+
+    for (const test of tests) {
+      it(`should return ${test.want} for ${test.input}`, () => {
+        expect(
+          format(runParse(runLexer(test.input)), {
+            lineWidth: 30,
+            indentWidth: 4,
+          })
+        ).toEqual(test.want);
+      });
+    }
+  });
+}
+
 if (process.env.NODE_ENV !== "test") {
   const doPlot = process.argv.findIndex((arg) => arg === "--plot") !== -1;
 
@@ -1257,39 +1397,53 @@ if (process.env.NODE_ENV !== "test") {
   const check = process.argv.findIndex(
     (arg) => arg === "--check" || arg === "-c"
   );
+  const fmt = process.argv.findIndex((arg) => arg === "--format");
   if (input) {
     try {
       const ast = runParse(runLexer(input));
       if (check !== -1) {
         typecheck(ast);
       }
-      const result = interpret(ast);
-      if (result.type === "number") {
-        console.log(result.value);
-      } else if (result.type === "function") {
-        console.log(`<Function:${result.name}>`);
+      if (fmt !== -1) {
+        console.log(
+          format(ast, {
+            lineWidth: 15,
+            indentWidth: 4,
+          })
+        );
+      } else {
+        const result = interpret(ast);
+        if (result.type === "number") {
+          console.log(result.value);
+        } else if (result.type === "function") {
+          console.log(`<Function:${result.name}>`);
 
-        if (doPlot) {
-          const steps = 100;
-          const ids: number[] = [];
-          const xs: number[] = [];
-          const ys: number[] = [];
-          for (let i = 0; i <= steps; i++) {
-            const x = plotStart + (plotEnd - plotStart) * (i / steps);
-            const y = expectNumber(
-              interpretExpression(result.body, {}, { [result.arguments[0]]: x })
-            );
+          if (doPlot) {
+            const steps = 100;
+            const ids: number[] = [];
+            const xs: number[] = [];
+            const ys: number[] = [];
+            for (let i = 0; i <= steps; i++) {
+              const x = plotStart + (plotEnd - plotStart) * (i / steps);
+              const y = expectNumber(
+                interpretExpression(
+                  result.body,
+                  {},
+                  { [result.arguments[0]]: x }
+                )
+              );
 
-            console.log(`f(${x}) = ${y}`);
-            ids.push(i);
-            xs.push(x);
-            ys.push(y);
+              console.log(`f(${x}) = ${y}`);
+              ids.push(i);
+              xs.push(x);
+              ys.push(y);
+            }
+            spawnSync("gnuplot", ["-p", "-persist"], {
+              input: `plot '-' with lines\n${ids
+                .map((i) => `${xs[i]} ${ys[i]}`)
+                .join("\n")}\ne\n`,
+            });
           }
-          spawnSync("gnuplot", ["-p", "-persist"], {
-            input: `plot '-' with lines\n${ids
-              .map((i) => `${xs[i]} ${ys[i]}`)
-              .join("\n")}\ne\n`,
-          });
         }
       }
     } catch (err) {
