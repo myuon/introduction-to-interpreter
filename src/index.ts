@@ -1,8 +1,9 @@
 import { spawnSync } from "child_process";
 
 class ErrorWrapper<T> extends Error {
-  constructor(public value: T) {
+  constructor(name: string, public value: T) {
     super();
+    this.name = name;
     this.value = value;
     this.message = JSON.stringify(value);
   }
@@ -77,19 +78,29 @@ interface Token {
     | "semicolon";
   number?: number;
   variable?: string;
+  position?: number;
 }
 
 type LexerError = {
   type: "unexpectedCharacter";
   got: string;
+  position?: number;
 };
 
 const lexerError = (error: LexerError): ErrorWrapper<LexerError> =>
-  new ErrorWrapper(error);
+  new ErrorWrapper("lexerError", error);
 
-const runLexer = (input: string): Token[] => {
+const runLexer = (input: string, withPosition: boolean = true): Token[] => {
   const tokens: Token[] = [];
   let position = 0;
+
+  const pushToken = (token: Token) => {
+    tokens.push({
+      ...token,
+      position: withPosition ? position : undefined,
+    });
+  };
+
   while (position < input.length) {
     if (input[position] === " " || input[position] === "\n") {
       position++;
@@ -98,61 +109,61 @@ const runLexer = (input: string): Token[] => {
 
     const numberStr = consumeNumberLiteral(input.slice(position));
     if (numberStr) {
-      tokens.push({ type: "number", number: parseFloat(numberStr) });
+      pushToken({ type: "number", number: parseFloat(numberStr) });
       position += numberStr.length;
       continue;
     }
 
     if (input.slice(position, position + 3) === "def") {
-      tokens.push({ type: "def" });
+      pushToken({ type: "def" });
       position += 3;
       continue;
     }
 
     const variableStr = consumeVariable(input.slice(position));
     if (variableStr) {
-      tokens.push({ type: "variable", variable: variableStr });
+      pushToken({ type: "variable", variable: variableStr });
       position += variableStr.length;
       continue;
     }
 
     if (input[position] === "+") {
-      tokens.push({ type: "plus" });
+      pushToken({ type: "plus", position });
       position++;
       continue;
     }
     if (input[position] === "-") {
-      tokens.push({ type: "minus" });
+      pushToken({ type: "minus", position });
       position++;
       continue;
     }
     if (input[position] === "*") {
-      tokens.push({ type: "mult" });
+      pushToken({ type: "mult" });
       position++;
       continue;
     }
     if (input[position] === "/") {
-      tokens.push({ type: "div" });
+      pushToken({ type: "div" });
       position++;
       continue;
     }
     if (input[position] === "(") {
-      tokens.push({ type: "lparen" });
+      pushToken({ type: "lparen" });
       position++;
       continue;
     }
     if (input[position] === ")") {
-      tokens.push({ type: "rparen" });
+      pushToken({ type: "rparen" });
       position++;
       continue;
     }
     if (input[position] === ";") {
-      tokens.push({ type: "semicolon" });
+      pushToken({ type: "semicolon" });
       position++;
       continue;
     }
     if (input.slice(position, position + 2) === ":=") {
-      tokens.push({ type: "assignment" });
+      pushToken({ type: "assignment" });
       position += 2;
       continue;
     }
@@ -160,6 +171,7 @@ const runLexer = (input: string): Token[] => {
     throw lexerError({
       type: "unexpectedCharacter",
       got: input[position],
+      position,
     });
   }
 
@@ -195,7 +207,7 @@ if (import.meta.vitest) {
 
     for (const test of tests) {
       it(`should return ${JSON.stringify(test.want)} for ${test.input}`, () => {
-        expect(runLexer(test.input)).toEqual(test.want);
+        expect(runLexer(test.input, false)).toEqual(test.want);
       });
     }
   });
@@ -207,6 +219,7 @@ if (import.meta.vitest) {
         want: {
           type: "unexpectedCharacter",
           got: "=",
+          position: 9,
         },
       },
     ];
@@ -214,7 +227,7 @@ if (import.meta.vitest) {
     for (const test of tests) {
       it(`should return ${JSON.stringify(test.want)} for ${test.input}`, () => {
         try {
-          runLexer(test.input);
+          runLexer(test.input, false);
           expect(true).toBe(false);
         } catch (e) {
           const error = e as ErrorWrapper<LexerError>;
@@ -279,7 +292,7 @@ type ParseError =
     };
 
 const parseError = (error: ParseError): ErrorWrapper<ParseError> =>
-  new ErrorWrapper(error);
+  new ErrorWrapper("parseError", error);
 
 const runParse = (tokens: Token[]): GLang => {
   let position = 0;
@@ -643,7 +656,7 @@ if (import.meta.vitest) {
     for (const test of tests) {
       it(`should return ${JSON.stringify(test.want)} for ${test.input}`, () => {
         try {
-          runParse(runLexer(test.input));
+          runParse(runLexer(test.input, false));
           expect(true).toBe(false);
         } catch (e) {
           const error = e as ErrorWrapper<ParseError>;
@@ -891,33 +904,46 @@ if (process.env.NODE_ENV !== "test") {
     plotEndIndex !== -1 ? parseFloat(process.argv[plotEndIndex + 1]) : 1;
 
   const arg = process.argv.findIndex((arg) => arg === "-e");
+  const input = process.argv[arg + 1];
   if (arg !== -1) {
-    const result = interpret(runParse(runLexer(process.argv[arg + 1])));
-    if (result.type === "number") {
-      console.log(result.value);
-    } else {
-      if (doPlot) {
-        const steps = 100;
-        const ids: number[] = [];
-        const xs: number[] = [];
-        const ys: number[] = [];
-        for (let i = 0; i <= steps; i++) {
-          const x = plotStart + (plotEnd - plotStart) * (i / steps);
-          const y = expectNumber(
-            interpretExpression(result.body, {}, { [result.arguments[0]]: x })
-          );
+    try {
+      const result = interpret(runParse(runLexer(input)));
+      if (result.type === "number") {
+        console.log(result.value);
+      } else {
+        if (doPlot) {
+          const steps = 100;
+          const ids: number[] = [];
+          const xs: number[] = [];
+          const ys: number[] = [];
+          for (let i = 0; i <= steps; i++) {
+            const x = plotStart + (plotEnd - plotStart) * (i / steps);
+            const y = expectNumber(
+              interpretExpression(result.body, {}, { [result.arguments[0]]: x })
+            );
 
-          console.log(`f(${x}) = ${y}`);
-          ids.push(i);
-          xs.push(x);
-          ys.push(y);
+            console.log(`f(${x}) = ${y}`);
+            ids.push(i);
+            xs.push(x);
+            ys.push(y);
+          }
+          spawnSync("gnuplot", ["-p", "-persist"], {
+            input: `plot '-' with lines\n${ids
+              .map((i) => `${xs[i]} ${ys[i]}`)
+              .join("\n")}\ne\n`,
+          });
         }
-        spawnSync("gnuplot", ["-p", "-persist"], {
-          input: `plot '-' with lines\n${ids
-            .map((i) => `${xs[i]} ${ys[i]}`)
-            .join("\n")}\ne\n`,
-        });
       }
+    } catch (err) {
+      if (err instanceof ErrorWrapper) {
+        if (err.name === "lexerError") {
+          const errValue = (err as ErrorWrapper<LexerError>).value;
+
+          console.error(`${input}\n${" ".repeat(errValue.position!)}^`);
+        }
+      }
+
+      throw err;
     }
   } else {
     console.log(`Usage: bun run ${process.argv[1]} -e "expression"`);
