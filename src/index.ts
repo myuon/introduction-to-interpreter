@@ -77,7 +77,9 @@ interface Token {
     | "assignment"
     | "def"
     | "semicolon"
-    | "comma";
+    | "comma"
+    | "question"
+    | "colon";
   number?: number;
   variable?: string;
   position?: number;
@@ -169,9 +171,19 @@ const runLexer = (input: string, withPosition: boolean = true): Token[] => {
       position++;
       continue;
     }
+    if (input[position] === "?") {
+      pushToken({ type: "question" });
+      position++;
+      continue;
+    }
     if (input.slice(position, position + 2) === ":=") {
       pushToken({ type: "assignment" });
       position += 2;
+      continue;
+    }
+    if (input[position] === ":") {
+      pushToken({ type: "colon" });
+      position++;
       continue;
     }
 
@@ -288,6 +300,13 @@ type Expression =
   | {
       type: "paren";
       expression: Expression;
+      position?: number;
+    }
+  | {
+      type: "condOperator";
+      condition: Expression;
+      then: Expression;
+      else: Expression;
       position?: number;
     };
 
@@ -407,7 +426,24 @@ const runParse = (tokens: Token[], withPosition: boolean = true): GLang => {
     };
   };
   const expression = (): Expression => {
-    return term2();
+    const term = term2();
+
+    if (position < tokens.length && getToken().type === "question") {
+      position++;
+      const then = expression();
+      expect("colon");
+      const elseExpr = expression();
+
+      return {
+        type: "condOperator",
+        condition: term,
+        then,
+        else: elseExpr,
+        position: term.position,
+      };
+    } else {
+      return term;
+    }
   };
   const term2 = (): Expression => {
     let current = term1();
@@ -834,6 +870,22 @@ const builtins = Object.fromEntries(
       },
       body: (args: number[]) => Math.log(args[0]),
     },
+    {
+      name: "min",
+      arguments: [{ type: "number" }, { type: "number" }],
+      result: {
+        type: "number",
+      },
+      body: (args: number[]) => Math.min(args[0], args[1]),
+    },
+    {
+      name: "max",
+      arguments: [{ type: "number" }, { type: "number" }],
+      result: {
+        type: "number",
+      },
+      body: (args: number[]) => Math.max(args[0], args[1]),
+    },
   ].map((builtin) => [builtin.name, builtin])
 ) as Record<string, Builtin>;
 
@@ -878,6 +930,9 @@ const typeError = (error: TypeError): ErrorWrapper<TypeError> =>
 const unify = (want: Type, got: Type, position?: number): Type => {
   if (want.type === "unknown") {
     return got;
+  }
+  if (got.type === "unknown") {
+    return want;
   }
   if (want.type === "number" && got.type === "number") {
     return { type: "number" };
@@ -925,6 +980,12 @@ const typecheck = (ast: GLang): Type => {
   for (let i = 0; i < ast.length; i++) {
     const stmt = ast[i];
     if (stmt.type === "definition") {
+      defs[stmt.name] = {
+        type: "function",
+        arguments: stmt.arguments.map(() => ({ type: "number" })),
+        result: { type: "unknown" },
+      };
+
       const assignments: Record<string, Type> = {};
       for (const arg of stmt.arguments) {
         assignments[arg] = { type: "number" };
@@ -1032,6 +1093,16 @@ const typecheckExpression = (
       position: ast.position,
     });
   }
+  if (ast.type === "paren") {
+    return typecheckExpression(ast.expression, want, defs, assignments);
+  }
+  if (ast.type === "condOperator") {
+    typecheckExpression(ast.condition, { type: "number" }, defs, assignments);
+
+    const then = typecheckExpression(ast.then, want, defs, assignments);
+    const elseResult = typecheckExpression(ast.else, want, defs, assignments);
+    return unify(then, elseResult, ast.position);
+  }
 
   throw new Error("unreachable");
 };
@@ -1051,6 +1122,18 @@ if (import.meta.vitest) {
           type: "function",
           arguments: [{ type: "number" }],
           result: { type: "number" },
+        },
+      },
+      {
+        input: "10 ? 0 : 1",
+        want: {
+          type: "number",
+        },
+      },
+      {
+        input: "def f(n) := n ? f(n - 1) * n : 1; f(5)",
+        want: {
+          type: "number",
         },
       },
     ];
@@ -1142,14 +1225,16 @@ const expectNumber = (value: Value): number => {
   return value.value;
 };
 
-const interpret = (ast: GLang): Value => {
+const interpret = (
+  ast: GLang
+): { value: Value; defs: Record<string, Statement> } => {
   const defs: Record<string, Statement> = {};
 
   for (const stmt of ast) {
     if (stmt.type === "definition") {
       defs[stmt.name] = stmt;
     } else if (stmt.type === "expression") {
-      return interpretExpression(stmt.expression, defs, {});
+      return { value: interpretExpression(stmt.expression, defs, {}), defs };
     } else {
       throw new Error("Invalid AST");
     }
@@ -1250,6 +1335,16 @@ const interpretExpression = (
   if (ast.type === "paren") {
     return interpretExpression(ast.expression, defs, assignments);
   }
+  if (ast.type === "condOperator") {
+    const condition = expectNumber(
+      interpretExpression(ast.condition, defs, assignments)
+    );
+    if (condition > 0) {
+      return interpretExpression(ast.then, defs, assignments);
+    } else {
+      return interpretExpression(ast.else, defs, assignments);
+    }
+  }
 
   throw new Error("Invalid AST");
 };
@@ -1342,13 +1437,21 @@ if (import.meta.vitest) {
         input: "def f(x,y) := x * y; f(20, 40)",
         want: 800,
       },
+      {
+        input: "1 ? 10 : 20",
+        want: 10,
+      },
+      {
+        input: "0 ? 10 : 20",
+        want: 20,
+      },
     ];
 
     for (const test of tests) {
       it(`should return ${test.want} for ${test.input}`, () => {
-        expect(expectNumber(interpret(runParse(runLexer(test.input))))).toEqual(
-          test.want
-        );
+        expect(
+          expectNumber(interpret(runParse(runLexer(test.input))).value)
+        ).toEqual(test.want);
       });
     }
   });
@@ -1371,7 +1474,7 @@ if (import.meta.vitest) {
 
     for (const test of tests) {
       it(`should return ${JSON.stringify(test.want)} for ${test.input}`, () => {
-        expect(interpret(runParse(runLexer(test.input), false))).toEqual(
+        expect(interpret(runParse(runLexer(test.input), false)).value).toEqual(
           test.want
         );
       });
@@ -1548,7 +1651,7 @@ if (process.env.NODE_ENV !== "test") {
           })
         );
       } else {
-        const result = interpret(ast);
+        const { value: result, defs } = interpret(ast);
         if (result.type === "number") {
           console.log(result.value);
         } else if (result.type === "function") {
@@ -1566,11 +1669,9 @@ if (process.env.NODE_ENV !== "test") {
             for (let i = 0; i <= steps; i++) {
               const x = plotStart + (plotEnd - plotStart) * (i / steps);
               const y = expectNumber(
-                interpretExpression(
-                  result.body,
-                  {},
-                  { [result.arguments[0]]: x }
-                )
+                interpretExpression(result.body, defs, {
+                  [result.arguments[0]]: x,
+                })
               );
 
               console.log(`f(${x}) = ${y}`);
