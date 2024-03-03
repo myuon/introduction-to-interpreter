@@ -76,7 +76,8 @@ interface Token {
     | "variable"
     | "assignment"
     | "def"
-    | "semicolon";
+    | "semicolon"
+    | "comma";
   number?: number;
   variable?: string;
   position?: number;
@@ -160,6 +161,11 @@ const runLexer = (input: string, withPosition: boolean = true): Token[] => {
     }
     if (input[position] === ";") {
       pushToken({ type: "semicolon" });
+      position++;
+      continue;
+    }
+    if (input[position] === ",") {
+      pushToken({ type: "comma" });
       position++;
       continue;
     }
@@ -375,9 +381,19 @@ const runParse = (tokens: Token[], withPosition: boolean = true): GLang => {
 
     const name = expectVariable();
     expect("lparen");
-    const arg = expectVariable();
-    expect("rparen");
+    const args = [];
 
+    while (getToken().type !== "rparen") {
+      args.push(expectVariable());
+
+      const nextToken = getToken();
+      if (nextToken.type === "comma") {
+        position++;
+      } else {
+        break;
+      }
+    }
+    expect("rparen");
     expect("assignment");
 
     const body = expression();
@@ -385,7 +401,7 @@ const runParse = (tokens: Token[], withPosition: boolean = true): GLang => {
     return {
       type: "definition",
       name,
-      arguments: [arg],
+      arguments: args,
       body,
       position: withPosition ? defToken.position : undefined,
     };
@@ -459,7 +475,19 @@ const runParse = (tokens: Token[], withPosition: boolean = true): GLang => {
 
       if (position < tokens.length && tokens[position].type === "lparen") {
         position++;
-        const args = [expression()];
+        const args = [];
+
+        while (getToken().type !== "rparen") {
+          args.push(expression());
+
+          const nextToken = getToken();
+          if (nextToken.type === "comma") {
+            position++;
+          } else {
+            break;
+          }
+        }
+
         expect("rparen");
         return {
           type: "call",
@@ -680,6 +708,31 @@ if (import.meta.vitest) {
               type: "call",
               name: "f",
               arguments: [{ type: "number", value: 2 }],
+            },
+          },
+        ],
+      },
+      {
+        input: "def f(x, y) := x; f(2, 1)",
+        want: [
+          {
+            type: "definition",
+            name: "f",
+            arguments: ["x", "y"],
+            body: { type: "variable", variable: "x" },
+          },
+          {
+            type: "expression",
+            expression: {
+              type: "call",
+              name: "f",
+              arguments: [
+                { type: "number", value: 2 },
+                {
+                  type: "number",
+                  value: 1,
+                },
+              ],
             },
           },
         ],
@@ -1281,6 +1334,14 @@ if (import.meta.vitest) {
         input: "sqrt(4)",
         want: 2,
       },
+      {
+        input: "def f(x,y,z,w) := x * y + z / w; f(1,2,3,4)",
+        want: 2.75,
+      },
+      {
+        input: "def f(x,y) := x * y; f(20, 40)",
+        want: 800,
+      },
     ];
 
     for (const test of tests) {
@@ -1494,6 +1555,10 @@ if (process.env.NODE_ENV !== "test") {
           console.log(`<Function:${result.name}>`);
 
           if (doPlot) {
+            if (result.arguments.length !== 1) {
+              throw new Error("Can only plot functions with one argument");
+            }
+
             const steps = 100;
             const ids: number[] = [];
             const xs: number[] = [];
