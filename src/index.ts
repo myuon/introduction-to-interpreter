@@ -10,7 +10,7 @@ class ErrorWrapper<T> extends Error {
   }
 }
 
-const numberLiteralExp = /^\-?\d+(\.\d+)?/;
+const numberLiteralExp = /^\d+(\.\d+)?/;
 
 const consumeNumberLiteral = (t: string): string =>
   t.match(numberLiteralExp)?.[0] ?? "";
@@ -42,14 +42,6 @@ if (import.meta.vitest) {
     {
       input: "4...5",
       want: "4",
-    },
-    {
-      input: "-3",
-      want: "-3",
-    },
-    {
-      input: "-",
-      want: "",
     },
   ];
 
@@ -219,7 +211,8 @@ if (import.meta.vitest) {
         want: [
           { type: "number", number: 3 },
           { type: "minus" },
-          { type: "number", number: -7.4 },
+          { type: "minus" },
+          { type: "number", number: 7.4 },
         ],
       },
     ];
@@ -369,6 +362,19 @@ const runParse = (tokens: Token[], withPosition: boolean = true): GLang => {
     }
     position++;
     return token.variable!;
+  };
+  const expectNumber = (): number => {
+    const token = getToken();
+    if (token.type !== "number") {
+      throw parseError({
+        type: "tokenMismatch",
+        want: "number",
+        got: token.type,
+        position: withPosition ? token.position : undefined,
+      });
+    }
+    position++;
+    return token.number!;
   };
 
   const statements = (): GLang => {
@@ -538,6 +544,15 @@ const runParse = (tokens: Token[], withPosition: boolean = true): GLang => {
           position: withPosition ? token.position : undefined,
         };
       }
+    }
+    if (token.type === "minus") {
+      position++;
+      const num = expectNumber();
+
+      return {
+        type: "number",
+        value: -num!,
+      };
     }
 
     throw parseError({
@@ -1444,6 +1459,22 @@ if (import.meta.vitest) {
       {
         input: "0 ? 10 : 20",
         want: 20,
+      },
+      {
+        input: "1-2",
+        want: -1,
+      },
+      {
+        input: "3--2",
+        want: 5,
+      },
+      {
+        input: "3-2",
+        want: 1,
+      },
+      {
+        input: "-1",
+        want: -1,
       },
     ];
 
